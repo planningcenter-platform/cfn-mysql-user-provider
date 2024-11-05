@@ -70,8 +70,15 @@ Resources:
         SecurityGroupIds:
           - !Ref "SecurityGroup"
         SubnetIds: !Ref "Subnets"
-      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:binxio-cfn-mysql-user-provider-${VPC}"
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-mysql-user-provider-${VPC}"
       Handler: mysql_user_provider.handler
       MemorySize: 128
       Role: !GetAtt "LambdaRole.Arn"
       Runtime: python3.9
+
+Outputs:
+  LambdaFunction:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt "CFNDBUserProvider.Arn"
+    Export:
+      Name: !Sub "cfn-mysql-user-provider-${VPC}-function"

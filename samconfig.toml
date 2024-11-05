@@ -6,7 +6,7 @@ stack_name = "cfn-mysql-user-custom-provider"
 region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "SecurityGroup=sg-eb515a93 VPC=vpc-003c079935a04c784 Subnets=subnet-12a9314a,subnet-6dc53f51,subnet-425f1d34"
+parameter_overrides = "SecurityGroup=sg-eb515a93 VPC=vpc-4f01e028 Subnets=subnet-12a9314a,subnet-6dc53f51,subnet-425f1d34"
 
 [dev]
 [dev.deploy]
