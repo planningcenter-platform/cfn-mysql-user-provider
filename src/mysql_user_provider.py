@@ -134,6 +134,7 @@ class MySQLUser(ResourceProvider):
             response = self.ssm.put_parameter(
                 Name=name, 
                 Description='MySQL Password', 
+                Overwrite=True,
                 Value=mysql_password(''.join(random.choices(string.ascii_uppercase + string.digits, k=16))), 
                 Type='SecureString')
         except ClientError as e:
