@@ -70,7 +70,7 @@ Resources:
         SecurityGroupIds:
           - !Ref "SecurityGroup"
         SubnetIds: !Ref "Subnets"
-      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-mysql-user-provider-${VPC}"
+      FunctionName: !Sub "mysql-user-provider-${VPC}"
       Handler: mysql_user_provider.handler
       MemorySize: 128
       Role: !GetAtt "LambdaRole.Arn"
