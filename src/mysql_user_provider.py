@@ -105,6 +105,9 @@ def mysql_password(passwd):
     pass2 = sha1(pass1).hexdigest()
     return "*" + pass2.upper()
 
+def generate_password():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
+
 
 class MySQLUser(ResourceProvider):
 
@@ -135,7 +138,7 @@ class MySQLUser(ResourceProvider):
                 Name=name, 
                 Description='MySQL Password', 
                 Overwrite=True,
-                Value=mysql_password(''.join(random.choices(string.ascii_uppercase + string.digits, k=16))), 
+                Value=generate_password(), 
                 Type='SecureString')
         except ClientError as e:
             raise ValueError('Could not set password using name {}, {}'.format(name, e))
@@ -303,7 +306,7 @@ class MySQLUser(ResourceProvider):
                         self.user, self.user_password])
             else:
                 cursor.execute("SET PASSWORD FOR %s = %s", [
-                    self.user, mysql_password(self.user_password)])
+                    self.user, self.user_password])
         finally:
             cursor.close()
 
