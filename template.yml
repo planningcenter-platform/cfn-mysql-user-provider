@@ -74,7 +74,7 @@ Resources:
       Handler: mysql_user_provider.handler
       MemorySize: 128
       Role: !GetAtt "LambdaRole.Arn"
-      Runtime: python3.9
+      Runtime: python3.14
 
 Outputs:
   LambdaFunction:
