@@ -156,7 +156,7 @@ class MySQLConnection(ResourceProvider):
     def convert_property_types(self):
         self.heuristic_convert_property_types(self.properties)
 
-    def find_password(self, name):
+    def get_password(self, name):
         """
         returns the value of the parameter `name`, or None if it does not exist.
         """
@@ -172,7 +172,7 @@ class MySQLConnection(ResourceProvider):
     @property
     def dbowner_password(self):
         name = self.get('Database')['PasswordParameterName']
-        password = self.find_password(name)
+        password = self.get_password(name)
         if password is None:
             raise ValueError('No password found in parameter {}'.format(name))
         return password
@@ -244,7 +244,7 @@ class MySQLUser(MySQLConnection):
         parameter (e.g. with `pco env update`) and then update the resource.
         """
         name = self.get('PasswordParameterName')
-        password = self.find_password(name)
+        password = self.get_password(name)
         return password if password is not None else self.store_new_password(name)
 
     @property
