@@ -158,10 +158,10 @@ class MySQLUser(ResourceProvider):
 
     @property
     def dbowner_password(self):
-        name = self.get('Database')['PasswordParameterName']
-        password = self.get_password(name)
+        db = self.get('Database')
+        password = self.get_password(db['PasswordParameterName'])
         if password is None:
-            raise ValueError('No password found in parameter {}'.format(name))
+            raise ValueError('No password found in parameter {}'.format(db['PasswordParameterName']))
         return password
 
     @property
