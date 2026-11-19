@@ -1,23 +1,12 @@
 # PCO Customizations
 
-- Removes Secrets Manager and plaintext password support.
-- `PasswordParameterName`: an existing parameter is used as is, and applied to the user on every create and
-  update. A 32-character password is generated and stored only when the parameter doesn't exist. So
-  application passwords can be created with `pco env` first, and shared passwords (like `consolereadonly`'s)
-  are never overwritten. To rotate, `pco env update` the parameter, then update the resource (changing any
-  unused property, e.g. `PasswordVersion: 2`, is enough) and restart the app.
-- `UserPermissions` are granted on `Database.DBName`; `GlobalUserPermissions` on `*.*`. Grants are only ever
-  added: removing one from the template doesn't revoke it.
-- `UseIamAuth` creates the user with `AWSAuthenticationPlugin`.
+- removes secretsmanater and plaintext password support
+- Will create SSM parameter for user if ParameterStoreName is provided with a generated password
+- Adds support for add local and global permissions
+- Adds support for using IAM auth
+- An existing password parameter is used as is; a password is generated only when the parameter doesn't
+  exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
 - `User` may be `name@host`, e.g. `consolereadonly@10.%`.
-- `WithDatabase` defaults to `false`.
-- Deleting a `Custom::MySQLUser` locks the account (`DeletionPolicy: Retain`, the default) or drops it
-  (`Drop`). That includes the cleanup after a logical ID is renamed, or a first create that rolls back, even
-  when the user is still in use. Put `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain` on every
-  resource (not `RetainExceptOnCreate`) to leave users untouched.
-- Set `ServiceTimeout: 300` on each resource, so a provider that never answers fails in 5 minutes rather than
-  CloudFormation's default hour.
-- In grants, `_` in a database name is a MySQL wildcard (`app_x` also matches `appZx`).
 - `Custom::MySQLDatabase` creates a database if it doesn't exist and never drops one:
 
 ```yaml
@@ -26,25 +15,14 @@ ScreensProductionDatabase:
   DeletionPolicy: Retain
   UpdateReplacePolicy: Retain
   Properties:
+    ServiceToken: !ImportValue cfn-mysql-user-provider-vpc-4f01e028-function
     DatabaseName: screens_production
-    CharacterSet: utf8mb4          # default
-    Database:                      # the connection; DBName defaults to mysql
+    Database:
       Host: screens-production.cluster-xxxx.us-east-1.rds.amazonaws.com
       Port: 3306
       User: ministryadmin
       PasswordParameterName: /platform/aurora/screens/database-admin-password
-    ServiceToken: !ImportValue cfn-mysql-user-provider-vpc-4f01e028-function
 ```
-
-Tests run against a local MySQL 8.0 with no AWS access:
-
-```sh
-docker run -d --name cfn-mysql-test -e MYSQL_ROOT_PASSWORD=password -p 8033:3306 mysql:8.0
-make test
-```
-
-Deploy with `sam build && sam deploy` (`--config-env dev` for us-east-2, `--config-env secondary` for the
-Secondary Apps account).
 
 Example template
 

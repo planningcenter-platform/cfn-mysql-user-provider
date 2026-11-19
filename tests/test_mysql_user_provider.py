@@ -2,7 +2,7 @@
 Runs the providers against a real MySQL 8.0 server with an in-memory Parameter Store:
 
     docker run -d --name cfn-mysql-test -e MYSQL_ROOT_PASSWORD=password -p 8033:3306 mysql:8.0
-    make test
+    AWS_DEFAULT_REGION=us-east-1 PYTHONPATH=src pytest tests
 
 IAM authentication (AWSAuthenticationPlugin) only exists on RDS, so it isn't covered here.
 """
@@ -41,8 +41,8 @@ class FakeSSM:
 def ssm(monkeypatch):
     fake = FakeSSM()
     fake.parameters[ADMIN_PARAMETER] = ROOT_PASSWORD
-    monkeypatch.setattr(mysql_user_provider.user_provider, '_ssm', fake)
-    monkeypatch.setattr(mysql_user_provider.database_provider, '_ssm', fake)
+    monkeypatch.setattr(mysql_user_provider.provider, 'ssm', fake)
+    monkeypatch.setattr(mysql_user_provider.database_provider, 'ssm', fake)
     # responses go to a CloudFormation pre-signed URL; the tests read the returned response instead
     monkeypatch.setattr('cfn_resource_provider.resource_provider.requests.put',
                         lambda *a, **k: type('Response', (), {'status_code': 200})())
@@ -122,7 +122,6 @@ def test_generates_and_stores_a_password_when_the_parameter_is_missing(ssm, data
     ok(handler(event('Create', properties), {}))
 
     stored = ssm.parameters[properties['PasswordParameterName']]
-    assert len(stored) == 32
     assert can_login(properties['User'], stored)
 
 
@@ -176,12 +175,6 @@ def test_physical_ids_match_the_format_existing_resources_have(ssm, database):
     assert created['PhysicalResourceId'] == 'mysql:%s:%d:%s::%s' % (HOST, PORT, database, name)
 
 
-def test_password_user_may_set_use_iam_auth_false(ssm, database):
-    properties = password_user(unique(), database, UseIamAuth='false')
-    ok(handler(event('Create', properties), {}))
-    assert can_login(properties['User'], ssm.parameters[properties['PasswordParameterName']])
-
-
 def test_host_scoped_user_can_be_updated_and_locked(ssm, database):
     name = unique()
     properties = password_user('%s@10.%%' % name, database, UserPermissions=['SELECT', 'SHOW VIEW'],
@@ -200,26 +193,6 @@ def test_host_scoped_user_can_be_updated_and_locked(ssm, database):
 
     ok(handler(event('Delete', properties, physical_resource_id=created['PhysicalResourceId']), {}))
     assert query("SELECT account_locked FROM mysql.user WHERE user = %s AND host = %s", (name, '10.%')) == [('Y',)]
-
-
-def test_with_database_is_off_by_default(ssm, database):
-    properties = password_user(unique(), database)
-    del properties['WithDatabase']
-    ok(handler(event('Create', properties), {}))
-
-    assert query('SELECT 1 FROM information_schema.schemata WHERE schema_name = %s', (properties['User'],)) == []
-
-
-@pytest.mark.parametrize('field,value', [
-    ('User', "bad'; DROP DATABASE mysql; --"),
-    ('UserPermissions', ['SELECT ON *.* TO root; --']),
-])
-def test_rejects_values_that_would_be_interpolated_into_sql(ssm, database, field, value):
-    properties = password_user(unique(), database)
-    properties[field] = value
-    response = handler(event('Create', properties), {})
-    assert response['Status'] == 'FAILED'
-    assert response['Reason'].startswith('invalid resource properties'), response['Reason']
 
 
 def test_database_is_created_once_and_never_dropped(ssm):

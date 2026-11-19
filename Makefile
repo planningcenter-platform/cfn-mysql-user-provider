@@ -56,21 +56,24 @@ target/$(NAME)-$(VERSION).zip: src/*.py requirements.txt
 		docker rm -f $$ID && \
 		chmod ugo+r target/$(NAME)-$(VERSION).zip
 
-venv: src/requirements.txt
-	python3 -m venv venv  && \
+venv: requirements.txt
+	virtualenv -p python3.9 venv  && \
 	. ./venv/bin/activate && \
 	pip install --quiet --upgrade pip && \
-	pip install --quiet -r src/requirements.txt
-
+	pip install --quiet -r requirements.txt 
+	
 clean:
 	rm -rf venv target
 	rm -rf src/*.pyc tests/*.pyc
 
-# Needs a MySQL 8.0 server on port 8033 (see tests/test_mysql_user_provider.py); no AWS access.
 test: venv
+	for i in $$PWD/cloudformation/*; do \
+		aws cloudformation validate-template --template-body file://$$i > /dev/null || exit 1; \
+	done
 	. ./venv/bin/activate && \
-	pip install --quiet -r test-requirements.txt && \
-	AWS_DEFAULT_REGION=us-east-1 PYTHONPATH=$(PWD)/src pytest tests
+	pip install --quiet -r requirements.txt -r test-requirements.txt && \
+	cd src && \
+        PYTHONPATH=$(PWD)/src pytest ../tests/test*.py
 
 autopep:
 	autopep8 --experimental --in-place --max-line-length 132 src/*.py tests/*.py
