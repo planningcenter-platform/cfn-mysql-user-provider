@@ -28,17 +28,29 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # Admin and user passwords are read from these two trees.
           - Effect: Allow
             Action:
               - ssm:GetParameter
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/platform/aurora/*"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/application/parameters/*"
+          # Generated passwords are only ever written for the migration users.
+          # Application passwords are created with `pco env` and only read here.
+          - Effect: Allow
+            Action:
               - ssm:PutParameter
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/application/parameters/*/migration_user*"
           - Effect: Allow
             Action:
               - kms:Decrypt
+              - kms:Encrypt
             Resource:
               - "*"
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
           - Action:
               - logs:*
             Resource: arn:aws:logs:*:*:*
@@ -73,8 +85,11 @@ Resources:
       FunctionName: !Sub "mysql-user-provider-${VPC}"
       Handler: mysql_user_provider.handler
       MemorySize: 128
+      # The 3s default doesn't cover a VPC cold start, two SSM calls and the SQL.
+      # A timed-out invocation sends no response, so CloudFormation waits an hour.
+      Timeout: 60
       Role: !GetAtt "LambdaRole.Arn"
-      Runtime: python3.14
+      Runtime: python3.13
 
 Outputs:
   LambdaFunction:

@@ -1,10 +1,10 @@
+import copy
 import logging
 import os
-
-import random
+import secrets
 import string
+
 import boto3
-from hashlib import sha1
 import mysql.connector
 from botocore.exceptions import ClientError
 from cfn_resource_provider import ResourceProvider
@@ -12,10 +12,47 @@ from cfn_resource_provider import ResourceProvider
 log = logging.getLogger()
 log.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
+# Identifiers and privileges are interpolated into GRANT and CREATE DATABASE
+# statements, which can't take bind parameters, so their shape is restricted.
+USER_PATTERN = r"^[A-Za-z0-9_]{1,32}(@[A-Za-z0-9_.%-]+)?$"
+DATABASE_NAME_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+PRIVILEGE_PATTERN = r"^[A-Za-z_ ]+$"
+
+connection_schema = {
+    "type": "object",
+    "required": ["DBName", "Host", "Port", "User", "PasswordParameterName"],
+    "properties": {
+        "DBName": {
+            "type": "string",
+            "pattern": DATABASE_NAME_PATTERN,
+            "default": "mysql",
+            "description": "the database to connect to; UserPermissions are granted on it"
+        },
+        "Host": {
+            "type": "string",
+            "description": "the host of the database"
+        },
+        "Port": {
+            "type": "integer",
+            "default": 3306,
+            "description": "the network port of the database"
+        },
+        "User": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "the username of the database owner"
+        },
+        "PasswordParameterName": {
+            "type": "string",
+            "description": "the name of the database owner password in the Parameter Store."
+        }
+    }
+}
+
 request_schema = {
     "$schema": "http://json-schema.org/draft-04/schema#",
     "type": "object",
-    "oneOf": [
+    "anyOf": [
         {"required": ["Database", "User", "PasswordParameterName"]},
         {"required": ["Database", "User", "UseIamAuth"]}
     ],
@@ -23,34 +60,32 @@ request_schema = {
         "Database": {"$ref": "#/definitions/connection"},
         "User": {
             "type": "string",
-            "maxLength": 32,
-            "description": "the user to create"
+            "pattern": USER_PATTERN,
+            "description": "the user to create, optionally as user@host"
         },
         "PasswordParameterName": {
             "type": "string",
             "minLength": 1,
-            "description": "the name of the password in the Parameter Store."
+            "description": "the Parameter Store name of the user's password. An existing value is used as is "
+                           "(and applied to the user on every create and update); a password is generated "
+                           "and stored only when the parameter does not exist."
         },
         "UseIamAuth": {
             "type": "boolean",
             "description": "Use IAM auth instead of a password"
         },
-        "GlobalUserPermisions": {
+        "GlobalUserPermissions": {
             "type": "array",
-            "items": {
-                "type": "string"
-            }
+            "items": {"type": "string", "pattern": PRIVILEGE_PATTERN}
         },
         "UserPermissions": {
             "type": "array",
-            "items": {
-                "type": "string"
-            }
+            "items": {"type": "string", "pattern": PRIVILEGE_PATTERN}
         },
         "WithDatabase": {
             "type": "boolean",
-            "default": "True",
-            "description": "create a database with the same name, or only a user"
+            "default": False,
+            "description": "also create a database named after the user"
         },
         "DeletionPolicy": {
             "type": "string",
@@ -59,124 +94,83 @@ request_schema = {
         }
     },
     "definitions": {
-        "connection": {
-            "type": "object",
-            "oneOf": [
-                {"required": ["DBName", "Host", "Port", "User", "PasswordParameterName"]}
-            ],
-            "properties": {
-                "DBName": {
-                    "type": "string",
-                    "default": "mysql",
-                    "description": "the name of the database"
-                },
-                "Host": {
-                    "type": "string",
-                    "description": "the host of the database"
-                },
-                "Port": {
-                    "type": "integer",
-                    "default": 3306,
-                    "description": "the network port of the database"
-                },
-                "User": {
-                    "type": "string",
-                    "maxLength": 32,
-                    "description": "the username of the database owner"
-                },
-                "PasswordParameterName": {
-                    "type": "string",
-                    "description": "the name of the database owner password in the Parameter Store."
-                }
-            }
+        "connection": connection_schema
+    }
+}
+
+database_connection_schema = copy.deepcopy(connection_schema)
+database_connection_schema["required"] = ["Host", "Port", "User", "PasswordParameterName"]
+
+database_request_schema = {
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "required": ["Database", "DatabaseName"],
+    "properties": {
+        "Database": database_connection_schema,
+        "DatabaseName": {
+            "type": "string",
+            "pattern": DATABASE_NAME_PATTERN,
+            "description": "the database (schema) to create"
+        },
+        "CharacterSet": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_]+$",
+            "default": "utf8mb4"
+        },
+        "Collation": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_]+$"
         }
     }
 }
 
 
-def mysql_password(passwd):
-    """
-    Hash string twice with SHA1 and return uppercase hex digest,
-    prepended with an asterix.
-
-    This function is identical to the MySQL PASSWORD() function.
-    """
-    pass1 = sha1(passwd.encode('utf-8')).digest()
-    pass2 = sha1(pass1).hexdigest()
-    return "*" + pass2.upper()
-
 def generate_password():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(32))
 
 
-class MySQLUser(ResourceProvider):
+class MySQLConnection(ResourceProvider):
+    """
+    Shared Parameter Store and connection handling for the MySQL providers.
+    """
 
     def __init__(self):
-        super(MySQLUser, self).__init__()
-        self.ssm = boto3.client('ssm')
+        super(MySQLConnection, self).__init__()
+        self._ssm = None
         self.connection = None
-        self.request_schema = request_schema
+
+    @property
+    def ssm(self):
+        if self._ssm is None:
+            self._ssm = boto3.client('ssm')
+        return self._ssm
 
     def convert_property_types(self):
         self.heuristic_convert_property_types(self.properties)
 
-    def get_password(self, name):
+    def find_password(self, name):
+        """
+        returns the value of the parameter `name`, or None if it does not exist.
+        """
         try:
             log.info("Getting password from SSM using key: %s", name)
             response = self.ssm.get_parameter(Name=name, WithDecryption=True)
-            if response['Parameter']['Value']:
-                return response['Parameter']['Value']
-            else:
-                log.info("No password found")
+            return response['Parameter']['Value'] or None
         except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ParameterNotFound':
+                return None
             raise ValueError('Could not obtain password using name {}, {}'.format(name, e))
 
-    def set_password(self, name):
-        try:
-            log.info("Setting password for new user in parameter store key: %s", name)
-            response = self.ssm.put_parameter(
-                Name=name, 
-                Description='MySQL Password', 
-                Overwrite=True,
-                Value=generate_password(), 
-                Type='SecureString')
-        except ClientError as e:
-            raise ValueError('Could not set password using name {}, {}'.format(name, e))
-
-    @property
-    def user_password(self):
-        self.set_password(self.get('PasswordParameterName'))
-        return self.get_password(self.get('PasswordParameterName'))
+    def get_password(self, name):
+        password = self.find_password(name)
+        if password is None:
+            raise ValueError('No password found in parameter {}'.format(name))
+        return password
 
     @property
     def dbowner_password(self):
-        db = self.get('Database')
-        return self.get_password(db['PasswordParameterName'])
-
-    @property
-    def user(self):
-        return self.get('User')
-
-    @property
-    def use_iam_auth(self):
-        return self.get("UseIamAuth", False)
-
-    @property
-    def global_user_permissions(self):
-        return ", ".join(self.get("GlobalUserPermissions", []))
-    
-    @property
-    def user_permissions(self):
-        return ", ".join(self.get("UserPermissions", []))
-
-    @property
-    def mysql_user(self):
-        return self.user.split('@')[0]
-
-    @property
-    def mysql_user_host(self):
-        parts = self.user.split('@')
-        return parts[1] if len(parts) > 1 else '%'
+        return self.get_password(self.get('Database')['PasswordParameterName'])
 
     @property
     def host(self):
@@ -195,28 +189,11 @@ class MySQLUser(ResourceProvider):
         return self.get('Database', {}).get('User', None)
 
     @property
-    def with_database(self):
-        return self.get('WithDatabase', False)
-
-    @property
-    def deletion_policy(self):
-        return self.get('DeletionPolicy')
-
-    @property
     def connect_info(self):
+        # fail fast rather than outlive the Lambda timeout, which would leave
+        # CloudFormation waiting for a response that never comes
         return {'host': self.host, 'port': self.port, 'database': self.dbname,
-                'user': self.dbowner, 'password': self.dbowner_password}
-
-    @property
-    def allow_update(self):
-        return self.url == self.physical_resource_id
-
-    @property
-    def url(self):
-        if self.with_database:
-            return 'mysql:%s:%s:%s:%s:%s' % (self.host, self.port, self.dbname, self.mysql_user, self.user)
-        else:
-            return 'mysql:%s:%s:%s::%s' % (self.host, self.port, self.dbname, self.user)
+                'user': self.dbowner, 'password': self.dbowner_password, 'connection_timeout': 10}
 
     def connect(self):
         log.info('connecting to database %s on port %d as user %s', self.host, self.port, self.dbowner)
@@ -232,6 +209,88 @@ class MySQLUser(ResourceProvider):
             self.connection.close()
             self.connection = None
 
+
+class MySQLUser(MySQLConnection):
+
+    def __init__(self):
+        super(MySQLUser, self).__init__()
+        self.request_schema = request_schema
+
+    def store_new_password(self, name):
+        log.info("Storing a new password in parameter store key: %s", name)
+        password = generate_password()
+        try:
+            self.ssm.put_parameter(
+                Name=name,
+                Description='MySQL Password',
+                Overwrite=True,
+                Value=password,
+                Type='SecureString')
+        except ClientError as e:
+            raise ValueError('Could not set password using name {}, {}'.format(name, e))
+        return password
+
+    @property
+    def user_password(self):
+        """
+        the user's password from the Parameter Store. A new one is generated and stored only
+        when the parameter does not exist yet, so updating the resource never changes a
+        password an application or other cluster already uses. To rotate, change the
+        parameter (e.g. with `pco env update`) and then update the resource.
+        """
+        name = self.get('PasswordParameterName')
+        password = self.find_password(name)
+        return password if password is not None else self.store_new_password(name)
+
+    @property
+    def user(self):
+        return self.get('User')
+
+    @property
+    def use_iam_auth(self):
+        return self.get("UseIamAuth", False)
+
+    @property
+    def global_user_permissions(self):
+        return ", ".join(self.get("GlobalUserPermissions", []))
+
+    @property
+    def user_permissions(self):
+        return ", ".join(self.get("UserPermissions", []))
+
+    @property
+    def mysql_user(self):
+        return self.user.split('@')[0]
+
+    @property
+    def mysql_user_host(self):
+        parts = self.user.split('@')
+        return parts[1] if len(parts) > 1 else '%'
+
+    @property
+    def user_and_host(self):
+        """bind parameters for an account name, rendered as 'user'@'host'"""
+        return [self.mysql_user, self.mysql_user_host]
+
+    @property
+    def with_database(self):
+        return self.get('WithDatabase', False)
+
+    @property
+    def deletion_policy(self):
+        return self.get('DeletionPolicy')
+
+    @property
+    def allow_update(self):
+        return self.url == self.physical_resource_id
+
+    @property
+    def url(self):
+        if self.with_database:
+            return 'mysql:%s:%s:%s:%s:%s' % (self.host, self.port, self.dbname, self.mysql_user, self.user)
+        else:
+            return 'mysql:%s:%s:%s::%s' % (self.host, self.port, self.dbname, self.user)
+
     def db_exists(self):
         cursor = self.connection.cursor()
         try:
@@ -246,7 +305,7 @@ class MySQLUser(ResourceProvider):
         cursor = self.connection.cursor()
         try:
             cursor.execute(
-                "SELECT * FROM mysql.user WHERE user = %s AND host = %s", [self.mysql_user, self.mysql_user_host])
+                "SELECT * FROM mysql.user WHERE user = %s AND host = %s", self.user_and_host)
             rows = cursor.fetchall()
             return len(rows) > 0
         finally:
@@ -257,16 +316,10 @@ class MySQLUser(ResourceProvider):
         try:
             if self.deletion_policy == 'Drop':
                 log.info('drop user %s', self.user)
-                cursor.execute('DROP USER %s', [self.user])
+                cursor.execute('DROP USER %s@%s', self.user_and_host)
             else:
-                if self.is_5_7_or_higher():
-                    log.info('disable login of %s', self.user)
-                    cursor.execute("ALTER USER %s ACCOUNT LOCK", [self.user])
-                else:
-                    log.info('set random password for %s to disable login', self.user)
-                    cursor.execute("SET PASSWORD FOR %s = %s", [
-                        self.user,
-                        mysql_password(''.join(random.choices(string.ascii_uppercase + string.digits, k=16)))])
+                log.info('disable login of %s', self.user)
+                cursor.execute("ALTER USER %s@%s ACCOUNT LOCK", self.user_and_host)
         finally:
             cursor.close()
 
@@ -275,38 +328,22 @@ class MySQLUser(ResourceProvider):
             log.info('drop database of %s', self.user)
             cursor = self.connection.cursor()
             try:
-                cursor.execute('DROP DATABASE %s' % self.mysql_user)
+                cursor.execute('DROP DATABASE `%s`' % self.mysql_user)
             finally:
                 cursor.close()
         else:
             log.info('not dropping database %s', self.mysql_user)
 
-    def is_5_7_or_higher(self):
-        cursor = self.connection.cursor()
-        try:
-            cursor.execute('select version()')
-            version = cursor.fetchone()[0].split('.')
-            return int(version[0]) > 5 or (int(version[0]) == 5 and int(version[1]) >= 7)
-        except Exception as e:
-            self.fail('failed to determine database version, {}'.format(e))
-            raise e
-        finally:
-            cursor.close()
-
     def update_password(self):
         log.info('update password of user %s', self.user)
         cursor = self.connection.cursor()
         try:
-            if self.is_5_7_or_higher():
-                if self.use_iam_auth:
-                    cursor.execute("ALTER USER %s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS' ACCOUNT UNLOCK", [
-                        self.user])
-                else:
-                    cursor.execute("ALTER USER %s IDENTIFIED BY %s ACCOUNT UNLOCK", [
-                        self.user, self.user_password])
+            if self.use_iam_auth:
+                cursor.execute("ALTER USER %s@%s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS' ACCOUNT UNLOCK",
+                               self.user_and_host)
             else:
-                cursor.execute("SET PASSWORD FOR %s = %s", [
-                    self.user, self.user_password])
+                cursor.execute("ALTER USER %s@%s IDENTIFIED BY %s ACCOUNT UNLOCK",
+                               self.user_and_host + [self.user_password])
         finally:
             cursor.close()
 
@@ -317,12 +354,11 @@ class MySQLUser(ResourceProvider):
         try:
             if self.use_iam_auth:
                 log.info("Create with IAM Auth")
-                cursor.execute("CREATE USER %s@%s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS'", [
-                    self.mysql_user, self.mysql_user_host])
+                cursor.execute("CREATE USER %s@%s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS'",
+                               self.user_and_host)
             else:
                 log.info("Create with password")
-                cursor.execute('CREATE USER %s@%s IDENTIFIED BY %s', [
-                    self.mysql_user, self.mysql_user_host, self.user_password])
+                cursor.execute('CREATE USER %s@%s IDENTIFIED BY %s', self.user_and_host + [self.user_password])
         finally:
             cursor.close()
 
@@ -343,18 +379,18 @@ class MySQLUser(ResourceProvider):
             cursor.close()
 
     def create_database(self):
-        log.info('create database %s', self.user)
+        log.info('create database %s', self.mysql_user)
         cursor = self.connection.cursor()
         try:
-            cursor.execute("CREATE DATABASE %s" % self.mysql_user)
+            cursor.execute("CREATE DATABASE `%s`" % self.mysql_user)
         finally:
             cursor.close()
 
     def grant_ownership(self):
-        log.info('grant ownership on %s to %s', self.user, self.user)
+        log.info('grant ownership on %s to %s', self.mysql_user, self.user)
         cursor = self.connection.cursor()
         try:
-            cursor.execute("GRANT ALL ON %s.* TO '%s'@'%s' WITH GRANT OPTION" %
+            cursor.execute("GRANT ALL ON `%s`.* TO '%s'@'%s' WITH GRANT OPTION" %
                            (self.mysql_user, self.mysql_user, self.mysql_user_host))
         finally:
             cursor.close()
@@ -418,11 +454,70 @@ class MySQLUser(ResourceProvider):
             self.close()
 
 
-provider = MySQLUser()
+class MySQLDatabase(MySQLConnection):
+    """
+    Creates a database (schema) if it does not exist. It never drops one: deleting the
+    resource, or renaming it, leaves the database and its data in place.
+    """
+
+    def __init__(self):
+        super(MySQLDatabase, self).__init__()
+        self.request_schema = database_request_schema
+
+    @property
+    def database_name(self):
+        return self.get('DatabaseName')
+
+    @property
+    def url(self):
+        return 'mysql-database:%s:%s:%s' % (self.host, self.port, self.database_name)
+
+    def create_database(self):
+        statement = 'CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET %s' % (
+            self.database_name, self.get('CharacterSet'))
+        if self.get('Collation'):
+            statement += ' COLLATE %s' % self.get('Collation')
+        log.info('%s', statement)
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(statement)
+        finally:
+            cursor.close()
+
+    def create(self):
+        try:
+            self.connect()
+            self.create_database()
+            self.physical_resource_id = self.url
+        except Exception as e:
+            self.physical_resource_id = 'could-not-create'
+            self.fail('Failed to create database, %s' % e)
+        finally:
+            self.close()
+
+    def update(self):
+        # A new name or host gets a new physical id, so CloudFormation follows up with a
+        # Delete of the old one, which leaves it in place. An existing database's character
+        # set is never changed.
+        try:
+            self.connect()
+            self.create_database()
+            self.physical_resource_id = self.url
+        except Exception as e:
+            self.fail('Failed to update database, %s' % e)
+        finally:
+            self.close()
+
+    def delete(self):
+        self.success('databases are never dropped by this provider; %s left in place' % self.physical_resource_id)
+
+
+user_provider = MySQLUser()
+database_provider = MySQLDatabase()
 
 
 def handler(request, context):
-    log.info("Request received: %s", request)
-    return provider.handle(request, context)
-    
-
+    log.info("Request received for %s %s", request.get('ResourceType'), request.get('LogicalResourceId'))
+    if request.get('ResourceType') == 'Custom::MySQLDatabase':
+        return database_provider.handle(request, context)
+    return user_provider.handle(request, context)
