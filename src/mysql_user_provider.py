@@ -1,4 +1,3 @@
-import copy
 import logging
 import os
 import secrets
@@ -18,35 +17,40 @@ USER_PATTERN = r"^[A-Za-z0-9_]{1,32}(@[A-Za-z0-9_.%-]+)?$"
 DATABASE_NAME_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 PRIVILEGE_PATTERN = r"^[A-Za-z_ ]+$"
 
+# Both resources connect the same way. Only Custom::MySQLUser requires DBName,
+# because its UserPermissions are granted on it; the "mysql" default would
+# otherwise grant on the system database.
+connection_properties = {
+    "DBName": {
+        "type": "string",
+        "pattern": DATABASE_NAME_PATTERN,
+        "default": "mysql",
+        "description": "the database to connect to; UserPermissions are granted on it"
+    },
+    "Host": {
+        "type": "string",
+        "description": "the host of the database"
+    },
+    "Port": {
+        "type": "integer",
+        "default": 3306,
+        "description": "the network port of the database"
+    },
+    "User": {
+        "type": "string",
+        "maxLength": 32,
+        "description": "the username of the database owner"
+    },
+    "PasswordParameterName": {
+        "type": "string",
+        "description": "the name of the database owner password in the Parameter Store."
+    }
+}
+
 connection_schema = {
     "type": "object",
     "required": ["DBName", "Host", "Port", "User", "PasswordParameterName"],
-    "properties": {
-        "DBName": {
-            "type": "string",
-            "pattern": DATABASE_NAME_PATTERN,
-            "default": "mysql",
-            "description": "the database to connect to; UserPermissions are granted on it"
-        },
-        "Host": {
-            "type": "string",
-            "description": "the host of the database"
-        },
-        "Port": {
-            "type": "integer",
-            "default": 3306,
-            "description": "the network port of the database"
-        },
-        "User": {
-            "type": "string",
-            "maxLength": 32,
-            "description": "the username of the database owner"
-        },
-        "PasswordParameterName": {
-            "type": "string",
-            "description": "the name of the database owner password in the Parameter Store."
-        }
-    }
+    "properties": connection_properties
 }
 
 request_schema = {
@@ -98,8 +102,11 @@ request_schema = {
     }
 }
 
-database_connection_schema = copy.deepcopy(connection_schema)
-database_connection_schema["required"] = ["Host", "Port", "User", "PasswordParameterName"]
+database_connection_schema = {
+    "type": "object",
+    "required": ["Host", "Port", "User", "PasswordParameterName"],
+    "properties": connection_properties
+}
 
 database_request_schema = {
     "$schema": "http://json-schema.org/draft-04/schema#",
