@@ -73,6 +73,9 @@ Resources:
       FunctionName: !Sub "mysql-user-provider-${VPC}"
       Handler: mysql_user_provider.handler
       MemorySize: 128
+      # The 3s default doesn't cover a VPC cold start, SSM and the SQL. A timed-out
+      # invocation sends no response, so CloudFormation waits an hour.
+      Timeout: 60
       Role: !GetAtt "LambdaRole.Arn"
       Runtime: python3.14
 

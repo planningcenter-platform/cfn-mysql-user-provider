@@ -129,6 +129,8 @@ class MySQLUser(ResourceProvider):
             else:
                 log.info("No password found")
         except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ParameterNotFound':
+                return None
             raise ValueError('Could not obtain password using name {}, {}'.format(name, e))
 
     def set_password(self, name):
@@ -145,13 +147,22 @@ class MySQLUser(ResourceProvider):
 
     @property
     def user_password(self):
-        self.set_password(self.get('PasswordParameterName'))
-        return self.get_password(self.get('PasswordParameterName'))
+        # Use the existing password, so a password set with `pco env` or shared with other
+        # clusters is never overwritten. Generate one only when the parameter is missing.
+        name = self.get('PasswordParameterName')
+        password = self.get_password(name)
+        if password is None:
+            self.set_password(name)
+            password = self.get_password(name)
+        return password
 
     @property
     def dbowner_password(self):
         db = self.get('Database')
-        return self.get_password(db['PasswordParameterName'])
+        password = self.get_password(db['PasswordParameterName'])
+        if password is None:
+            raise ValueError('No password found in parameter {}'.format(db['PasswordParameterName']))
+        return password
 
     @property
     def user(self):
@@ -205,7 +216,7 @@ class MySQLUser(ResourceProvider):
     @property
     def connect_info(self):
         return {'host': self.host, 'port': self.port, 'database': self.dbname,
-                'user': self.dbowner, 'password': self.dbowner_password}
+                'user': self.dbowner, 'password': self.dbowner_password, 'connection_timeout': 10}
 
     @property
     def allow_update(self):
@@ -261,7 +272,7 @@ class MySQLUser(ResourceProvider):
             else:
                 if self.is_5_7_or_higher():
                     log.info('disable login of %s', self.user)
-                    cursor.execute("ALTER USER %s ACCOUNT LOCK", [self.user])
+                    cursor.execute("ALTER USER %s@%s ACCOUNT LOCK", [self.mysql_user, self.mysql_user_host])
                 else:
                     log.info('set random password for %s to disable login', self.user)
                     cursor.execute("SET PASSWORD FOR %s = %s", [
@@ -299,11 +310,11 @@ class MySQLUser(ResourceProvider):
         try:
             if self.is_5_7_or_higher():
                 if self.use_iam_auth:
-                    cursor.execute("ALTER USER %s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS' ACCOUNT UNLOCK", [
-                        self.user])
+                    cursor.execute("ALTER USER %s@%s IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS' ACCOUNT UNLOCK", [
+                        self.mysql_user, self.mysql_user_host])
                 else:
-                    cursor.execute("ALTER USER %s IDENTIFIED BY %s ACCOUNT UNLOCK", [
-                        self.user, self.user_password])
+                    cursor.execute("ALTER USER %s@%s IDENTIFIED BY %s ACCOUNT UNLOCK", [
+                        self.mysql_user, self.mysql_user_host, self.user_password])
             else:
                 cursor.execute("SET PASSWORD FOR %s = %s", [
                     self.user, self.user_password])
@@ -418,11 +429,103 @@ class MySQLUser(ResourceProvider):
             self.close()
 
 
+database_request_schema = {
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "required": ["Database", "DatabaseName"],
+    "properties": {
+        # the same connection as Custom::MySQLUser, but DBName is only used to connect
+        "Database": {
+            "type": "object",
+            "required": ["Host", "Port", "User", "PasswordParameterName"],
+            "properties": request_schema["definitions"]["connection"]["properties"]
+        },
+        # Interpolated into CREATE DATABASE, which can't take bind parameters.
+        "DatabaseName": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_-]{1,64}$",
+            "description": "the database (schema) to create"
+        },
+        "CharacterSet": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_]+$",
+            "default": "utf8mb4"
+        },
+        "Collation": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_]+$"
+        }
+    }
+}
+
+
+class MySQLDatabase(MySQLUser):
+    """
+    Creates a database (schema) if it does not exist, reusing MySQLUser's connection
+    handling. It never drops one: deleting the resource, or renaming it, leaves the
+    database and its data in place.
+    """
+
+    def __init__(self):
+        super(MySQLDatabase, self).__init__()
+        self.request_schema = database_request_schema
+
+    @property
+    def database_name(self):
+        return self.get('DatabaseName')
+
+    @property
+    def url(self):
+        return 'mysql-database:%s:%s:%s' % (self.host, self.port, self.database_name)
+
+    def create_database(self):
+        statement = 'CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET %s' % (
+            self.database_name, self.get('CharacterSet'))
+        if self.get('Collation'):
+            statement += ' COLLATE %s' % self.get('Collation')
+        log.info('%s', statement)
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(statement)
+        finally:
+            cursor.close()
+
+    def create(self):
+        try:
+            self.connect()
+            self.create_database()
+            self.physical_resource_id = self.url
+        except Exception as e:
+            self.physical_resource_id = 'could-not-create'
+            self.fail('Failed to create database, %s' % e)
+        finally:
+            self.close()
+
+    def update(self):
+        # A new name or host gets a new physical id, so CloudFormation follows up with a
+        # Delete of the old one, which leaves it in place. An existing database's character
+        # set is never changed.
+        try:
+            self.connect()
+            self.create_database()
+            self.physical_resource_id = self.url
+        except Exception as e:
+            self.fail('Failed to update database, %s' % e)
+        finally:
+            self.close()
+
+    def delete(self):
+        self.success('databases are never dropped by this provider; %s left in place' % self.physical_resource_id)
+
+
 provider = MySQLUser()
+database_provider = MySQLDatabase()
 
 
 def handler(request, context):
     log.info("Request received: %s", request)
+    if request.get('ResourceType') == 'Custom::MySQLDatabase':
+        return database_provider.handle(request, context)
     return provider.handle(request, context)
     
 

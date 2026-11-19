@@ -4,6 +4,25 @@
 - Will create SSM parameter for user if ParameterStoreName is provided with a generated password
 - Adds support for add local and global permissions
 - Adds support for using IAM auth
+- An existing password parameter is used as is; a password is generated only when the parameter doesn't
+  exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
+- `User` may be `name@host`, e.g. `consolereadonly@10.%`.
+- `Custom::MySQLDatabase` creates a database if it doesn't exist and never drops one:
+
+```yaml
+ScreensProductionDatabase:
+  Type: Custom::MySQLDatabase
+  DeletionPolicy: Retain
+  UpdateReplacePolicy: Retain
+  Properties:
+    ServiceToken: !ImportValue cfn-mysql-user-provider-vpc-4f01e028-function
+    DatabaseName: screens_production
+    Database:
+      Host: screens-production.cluster-xxxx.us-east-1.rds.amazonaws.com
+      Port: 3306
+      User: ministryadmin
+      PasswordParameterName: /platform/aurora/screens/database-admin-password
+```
 
 Example template
 
