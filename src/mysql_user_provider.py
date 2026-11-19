@@ -169,15 +169,13 @@ class MySQLConnection(ResourceProvider):
                 return None
             raise ValueError('Could not obtain password using name {}, {}'.format(name, e))
 
-    def get_password(self, name):
+    @property
+    def dbowner_password(self):
+        name = self.get('Database')['PasswordParameterName']
         password = self.find_password(name)
         if password is None:
             raise ValueError('No password found in parameter {}'.format(name))
         return password
-
-    @property
-    def dbowner_password(self):
-        return self.get_password(self.get('Database')['PasswordParameterName'])
 
     @property
     def host(self):
