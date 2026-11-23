@@ -6,6 +6,17 @@
 - Adds support for using IAM auth
 - An existing password parameter is used as is; a password is generated only when the parameter doesn't
   exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
+- `PasswordConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
+  already exist there, because PCO Config only lets people create values; the provider never writes it:
+
+```yaml
+    PasswordConfig:
+      RoleArn: arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-TKvv6aCLulFk
+      TableName: pco-config-ConfigGlobalTable-1K3VX7KANE0MF
+      Namespace: screens
+      Name: production/database/password
+```
+
 - `User` may be `name@host`, e.g. `consolereadonly@10.%`.
 - `Custom::MySQLDatabase` creates a database if it doesn't exist and never drops one:
 

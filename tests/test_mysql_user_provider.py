@@ -236,3 +236,61 @@ def test_rejects_a_database_name_with_a_backtick(ssm):
                              'Custom::MySQLDatabase'), {})
     assert response['Status'] == 'FAILED'
     assert response['Reason'].startswith('invalid resource properties'), response['Reason']
+
+
+class FakeConfigTable:
+    def __init__(self):
+        self.items = {}
+        self.role_arns = []
+
+    def get_item(self, TableName, Key):
+        item = self.items.get((Key['PK']['S'], Key['SK']['S']))
+        return {'Item': item} if item else {}
+
+
+@pytest.fixture
+def config_table(monkeypatch):
+    fake = FakeConfigTable()
+
+    def assume(role_arn):
+        fake.role_arns.append(role_arn)
+        return fake
+    monkeypatch.setattr(mysql_user_provider.provider, 'config_table', assume)
+    return fake
+
+
+def config_user(name, database):
+    properties = password_user(name, database)
+    del properties['PasswordParameterName']
+    properties['PasswordConfig'] = {'RoleArn': 'arn:aws:iam::499739914416:role/pco-config-read',
+                                    'TableName': 'pco-config-table', 'Namespace': 'screens',
+                                    'Name': 'production/database/password'}
+    return properties
+
+
+def test_reads_an_existing_password_from_pco_config(ssm, config_table, database):
+    properties = config_user(unique(), database)
+    config_table.items[('P#screens', 'LATEST#GLOBAL#production/database/password')] = {
+        'Value': {'S': 'set-in-pco-config'}}
+
+    created = ok(handler(event('Create', properties), {}))
+    ok(handler(event('Update', properties, physical_resource_id=created['PhysicalResourceId'],
+                     old_properties=properties), {}))
+
+    assert can_login(properties['User'], 'set-in-pco-config')
+    assert config_table.role_arns[0] == properties['PasswordConfig']['RoleArn']
+    assert ssm.puts == []
+
+
+@pytest.mark.parametrize('item', [None, {'Value': {'S': 'DELETED'}, 'DeletedAt': {'S': '2026-11-23T00:00:00Z'}}])
+def test_fails_when_the_pco_config_password_is_missing_or_deleted(ssm, config_table, database, item):
+    properties = config_user(unique(), database)
+    if item:
+        config_table.items[('P#screens', 'LATEST#GLOBAL#production/database/password')] = item
+
+    response = handler(event('Create', properties), {})
+
+    assert response['Status'] == 'FAILED'
+    assert 'create it there first' in response['Reason']
+    assert query("SELECT 1 FROM mysql.user WHERE user = %s", (properties['User'],)) == []
+    assert ssm.puts == []

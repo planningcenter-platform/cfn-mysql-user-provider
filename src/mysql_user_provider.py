@@ -17,7 +17,8 @@ request_schema = {
     "type": "object",
     "oneOf": [
         {"required": ["Database", "User", "PasswordParameterName"]},
-        {"required": ["Database", "User", "UseIamAuth"]}
+        {"required": ["Database", "User", "UseIamAuth"]},
+        {"required": ["Database", "User", "PasswordConfig"]}
     ],
     "properties": {
         "Database": {"$ref": "#/definitions/connection"},
@@ -30,6 +31,17 @@ request_schema = {
             "type": "string",
             "minLength": 1,
             "description": "the name of the password in the Parameter Store."
+        },
+        "PasswordConfig": {
+            "type": "object",
+            "description": "a SECRET in PCO Config that must already exist; it is read, never written",
+            "required": ["RoleArn", "TableName", "Namespace", "Name"],
+            "properties": {
+                "RoleArn": {"type": "string", "description": "the config store's read-only role"},
+                "TableName": {"type": "string"},
+                "Namespace": {"type": "string"},
+                "Name": {"type": "string"}
+            }
         },
         "UseIamAuth": {
             "type": "boolean",
@@ -145,8 +157,34 @@ class MySQLUser(ResourceProvider):
         except ClientError as e:
             raise ValueError('Could not set password using name {}, {}'.format(name, e))
 
+    def config_table(self, role_arn):
+        credentials = boto3.client('sts').assume_role(
+            RoleArn=role_arn, RoleSessionName='mysql-user-provider')['Credentials']
+        return boto3.client(
+            'dynamodb', region_name='us-east-1',
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken'])
+
+    def get_config_password(self, config):
+        # PCO Config only lets people create values, so this never writes one.
+        name = '%s.%s' % (config['Namespace'], config['Name'])
+        log.info("Getting password from PCO Config: %s", name)
+        try:
+            item = self.config_table(config['RoleArn']).get_item(
+                TableName=config['TableName'],
+                Key={'PK': {'S': 'P#' + config['Namespace']},
+                     'SK': {'S': 'LATEST#GLOBAL#' + config['Name']}}).get('Item')
+        except ClientError as e:
+            raise ValueError('Could not read {} from PCO Config, {}'.format(name, e))
+        if not item or 'DeletedAt' in item or not item.get('Value', {}).get('S'):
+            raise ValueError('No password found in PCO Config for {}; create it there first'.format(name))
+        return item['Value']['S']
+
     @property
     def user_password(self):
+        if self.get('PasswordConfig'):
+            return self.get_config_password(self.get('PasswordConfig'))
         # Use the existing password, so a password set with `pco env` or shared with other
         # clusters is never overwritten. Generate one only when the parameter is missing.
         name = self.get('PasswordParameterName')
