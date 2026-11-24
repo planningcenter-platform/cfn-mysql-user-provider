@@ -282,8 +282,9 @@ def test_reads_an_existing_password_from_pco_config(ssm, config_table, database)
     assert ssm.puts == []
 
 
-@pytest.mark.parametrize('item', [None, {'Value': {'S': 'DELETED'}, 'DeletedAt': {'S': '2026-11-23T00:00:00Z'}}])
-def test_fails_when_the_pco_config_password_is_missing_or_deleted(ssm, config_table, database, item):
+@pytest.mark.parametrize('item', [None, {'Value': {'S': 'DELETED'}, 'DeletedAt': {'S': '2026-11-23T00:00:00Z'}},
+                                  {'Value': {'S': 'PROMOTED UPDATE ME'}}])
+def test_fails_when_the_pco_config_password_is_missing_deleted_or_a_placeholder(ssm, config_table, database, item):
     properties = config_user(unique(), database)
     if item:
         config_table.items[('P#screens', 'LATEST#GLOBAL#production/database/password')] = item

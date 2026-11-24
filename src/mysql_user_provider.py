@@ -177,9 +177,11 @@ class MySQLUser(ResourceProvider):
                      'SK': {'S': 'LATEST#GLOBAL#' + config['Name']}}).get('Item')
         except ClientError as e:
             raise ValueError('Could not read {} from PCO Config, {}'.format(name, e))
-        if not item or 'DeletedAt' in item or not item.get('Value', {}).get('S'):
+        # Promoting a SECRET between stores leaves this placeholder until someone fills it in.
+        value = item.get('Value', {}).get('S') if item and 'DeletedAt' not in item else None
+        if not value or value == 'PROMOTED UPDATE ME':
             raise ValueError('No password found in PCO Config for {}; create it there first'.format(name))
-        return item['Value']['S']
+        return value
 
     @property
     def user_password(self):
