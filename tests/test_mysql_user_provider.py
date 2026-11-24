@@ -262,7 +262,7 @@ def config_table(monkeypatch):
 def config_user(name, database):
     properties = password_user(name, database)
     del properties['PasswordParameterName']
-    properties['PasswordConfig'] = {'RoleArn': 'arn:aws:iam::499739914416:role/pco-config-read',
+    properties['PasswordPCOConfig'] = {'RoleArn': 'arn:aws:iam::499739914416:role/pco-config-read',
                                     'TableName': 'pco-config-table', 'Namespace': 'screens',
                                     'Name': 'production/database/password'}
     return properties
@@ -278,14 +278,14 @@ def test_reads_an_existing_password_from_pco_config(ssm, config_table, database)
                      old_properties=properties), {}))
 
     assert can_login(properties['User'], 'set-in-pco-config')
-    assert config_table.role_arns[0] == properties['PasswordConfig']['RoleArn']
+    assert config_table.role_arns[0] == properties['PasswordPCOConfig']['RoleArn']
     assert ssm.puts == []
 
 
 @pytest.mark.parametrize('config_name', ['sentry/dsn', 'production/database/password_backup', 'database/passwords'])
 def test_only_reads_database_passwords_from_pco_config(ssm, config_table, database, config_name):
     properties = config_user(unique(), database)
-    properties['PasswordConfig']['Name'] = config_name
+    properties['PasswordPCOConfig']['Name'] = config_name
     config_table.items[('P#screens', 'LATEST#GLOBAL#' + config_name)] = {'Value': {'S': 'another-apps-secret'}}
 
     response = handler(event('Create', properties), {})

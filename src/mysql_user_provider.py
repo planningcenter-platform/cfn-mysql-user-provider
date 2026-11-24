@@ -18,7 +18,7 @@ request_schema = {
     "oneOf": [
         {"required": ["Database", "User", "PasswordParameterName"]},
         {"required": ["Database", "User", "UseIamAuth"]},
-        {"required": ["Database", "User", "PasswordConfig"]}
+        {"required": ["Database", "User", "PasswordPCOConfig"]}
     ],
     "properties": {
         "Database": {"$ref": "#/definitions/connection"},
@@ -32,7 +32,7 @@ request_schema = {
             "minLength": 1,
             "description": "the name of the password in the Parameter Store."
         },
-        "PasswordConfig": {
+        "PasswordPCOConfig": {
             "type": "object",
             "description": "a SECRET in PCO Config that must already exist; it is read, never written",
             "required": ["RoleArn", "TableName", "Namespace", "Name"],
@@ -171,7 +171,7 @@ class MySQLUser(ResourceProvider):
         name = '%s.%s' % (config['Namespace'], config['Name'])
         # The read role can reach every SECRET; only database passwords may be sent to a MySQL host.
         if config['Name'] != 'database/password' and not config['Name'].endswith('/database/password'):
-            raise ValueError('PasswordConfig can only read a database password (a name ending in database/password), '
+            raise ValueError('PasswordPCOConfig can only read a database password (a name ending in database/password), '
                              'not {}'.format(name))
         log.info("Getting password from PCO Config: %s", name)
         try:
@@ -189,8 +189,8 @@ class MySQLUser(ResourceProvider):
 
     @property
     def user_password(self):
-        if self.get('PasswordConfig'):
-            return self.get_config_password(self.get('PasswordConfig'))
+        if self.get('PasswordPCOConfig'):
+            return self.get_config_password(self.get('PasswordPCOConfig'))
         # Use the existing password, so a password set with `pco env` or shared with other
         # clusters is never overwritten. Generate one only when the parameter is missing.
         name = self.get('PasswordParameterName')

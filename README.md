@@ -6,13 +6,13 @@
 - Adds support for using IAM auth
 - An existing password parameter is used as is; a password is generated only when the parameter doesn't
   exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
-- `PasswordConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
+- `PasswordPCOConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
   already exist there, because PCO Config only lets people create values; the provider never writes it.
   `RoleArn` is pco-config-service's `ExternalConfigReadOnlyRole`, the same role apps read their config with.
   `Name` must end in `database/password`; the provider won't read anything else:
 
 ```yaml
-    PasswordConfig:
+    PasswordPCOConfig:
       RoleArn: arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-TKvv6aCLulFk
       TableName: pco-config-ConfigGlobalTable-1K3VX7KANE0MF
       Namespace: screens

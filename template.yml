@@ -39,7 +39,7 @@ Resources:
               - kms:Decrypt
             Resource:
               - "*"
-          # PasswordConfig: read app database passwords from PCO Config's production store,
+          # PasswordPCOConfig: read app database passwords from PCO Config's production store,
           # through the same read-only role every app assumes (cloudformation/iam/app-policy.yml).
           - Effect: Allow
             Action:
