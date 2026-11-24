@@ -169,6 +169,10 @@ class MySQLUser(ResourceProvider):
     def get_config_password(self, config):
         # PCO Config only lets people create values, so this never writes one.
         name = '%s.%s' % (config['Namespace'], config['Name'])
+        # The read role can reach every SECRET; only database passwords may be sent to a MySQL host.
+        if config['Name'] != 'database/password' and not config['Name'].endswith('/database/password'):
+            raise ValueError('PasswordConfig can only read a database password (a name ending in database/password), '
+                             'not {}'.format(name))
         log.info("Getting password from PCO Config: %s", name)
         try:
             item = self.config_table(config['RoleArn']).get_item(

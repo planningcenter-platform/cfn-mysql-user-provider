@@ -282,6 +282,19 @@ def test_reads_an_existing_password_from_pco_config(ssm, config_table, database)
     assert ssm.puts == []
 
 
+@pytest.mark.parametrize('config_name', ['sentry/dsn', 'production/database/password_backup', 'database/passwords'])
+def test_only_reads_database_passwords_from_pco_config(ssm, config_table, database, config_name):
+    properties = config_user(unique(), database)
+    properties['PasswordConfig']['Name'] = config_name
+    config_table.items[('P#screens', 'LATEST#GLOBAL#' + config_name)] = {'Value': {'S': 'another-apps-secret'}}
+
+    response = handler(event('Create', properties), {})
+
+    assert response['Status'] == 'FAILED'
+    assert 'can only read a database password' in response['Reason']
+    assert config_table.role_arns == []
+
+
 @pytest.mark.parametrize('item', [None, {'Value': {'S': 'DELETED'}, 'DeletedAt': {'S': '2026-11-23T00:00:00Z'}},
                                   {'Value': {'S': 'PROMOTED UPDATE ME'}}])
 def test_fails_when_the_pco_config_password_is_missing_deleted_or_a_placeholder(ssm, config_table, database, item):

@@ -8,8 +8,8 @@
   exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
 - `PasswordConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
   already exist there, because PCO Config only lets people create values; the provider never writes it.
-  `RoleArn` is pco-config-service's `ExternalConfigMySQLProviderReadRoleArn` output, which can only read the
-  namespaces listed there, so add the app's namespace to that role first:
+  `RoleArn` is pco-config-service's `ExternalConfigMySQLProviderReadRoleArn` output. `Name` must end in
+  `database/password`; the provider won't read anything else:
 
 ```yaml
     PasswordConfig:

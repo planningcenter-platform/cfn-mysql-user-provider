@@ -39,8 +39,8 @@ Resources:
               - kms:Decrypt
             Resource:
               - "*"
-          # PasswordConfig: read app passwords from PCO Config's production store,
-          # through a role limited to the namespaces listed in pco-config-service.
+          # PasswordConfig: read app database passwords from PCO Config's production store,
+          # through a GetItem-only role that only this Lambda can assume (pco-config-service).
           - Effect: Allow
             Action:
               - sts:AssumeRole
