@@ -4,6 +4,38 @@
 - Will create SSM parameter for user if ParameterStoreName is provided with a generated password
 - Adds support for add local and global permissions
 - Adds support for using IAM auth
+- An existing password parameter is used as is; a password is generated only when the parameter doesn't
+  exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
+- `PasswordPCOConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
+  already exist there, because PCO Config only lets people create values; the provider never writes it.
+  `RoleArn` is pco-config-service's `ExternalConfigReadOnlyRole`, the same role apps read their config with.
+  `Name` must end in `database/password`; the provider won't read anything else:
+
+```yaml
+    PasswordPCOConfig:
+      RoleArn: arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-TKvv6aCLulFk
+      TableName: pco-config-ConfigGlobalTable-1K3VX7KANE0MF
+      Namespace: screens
+      Name: production/database/password
+```
+
+- `User` may be `name@host`, e.g. `consolereadonly@10.%`.
+- `Custom::MySQLDatabase` creates a database if it doesn't exist and never drops one:
+
+```yaml
+ScreensProductionDatabase:
+  Type: Custom::MySQLDatabase
+  DeletionPolicy: Retain
+  UpdateReplacePolicy: Retain
+  Properties:
+    ServiceToken: !ImportValue cfn-mysql-user-provider-vpc-4f01e028-function
+    DatabaseName: screens_production
+    Database:
+      Host: screens-production.cluster-xxxx.us-east-1.rds.amazonaws.com
+      Port: 3306
+      User: ministryadmin
+      PasswordParameterName: /platform/aurora/screens/database-admin-password
+```
 
 Example template
 

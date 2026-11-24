@@ -39,6 +39,13 @@ Resources:
               - kms:Decrypt
             Resource:
               - "*"
+          # PasswordPCOConfig: read app database passwords from PCO Config's production store,
+          # through the same read-only role every app assumes (cloudformation/iam/app-policy.yml).
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-*
           - Action:
               - logs:*
             Resource: arn:aws:logs:*:*:*
@@ -73,6 +80,9 @@ Resources:
       FunctionName: !Sub "mysql-user-provider-${VPC}"
       Handler: mysql_user_provider.handler
       MemorySize: 128
+      # The 3s default doesn't cover a VPC cold start, SSM and the SQL. A timed-out
+      # invocation sends no response, so CloudFormation waits an hour.
+      Timeout: 60
       Role: !GetAtt "LambdaRole.Arn"
       Runtime: python3.14
 
