@@ -39,12 +39,13 @@ Resources:
               - kms:Decrypt
             Resource:
               - "*"
-          # PasswordConfig: read app passwords from PCO Config's production store.
+          # PasswordConfig: read app passwords from PCO Config's production store,
+          # through a role limited to the namespaces listed in pco-config-service.
           - Effect: Allow
             Action:
               - sts:AssumeRole
             Resource:
-              - arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-*
+              - arn:aws:iam::499739914416:role/pco-config-ExternalConfigMySQLProviderReadRole-*
           - Action:
               - logs:*
             Resource: arn:aws:logs:*:*:*

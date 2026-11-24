@@ -7,11 +7,13 @@
 - An existing password parameter is used as is; a password is generated only when the parameter doesn't
   exist. To rotate, `pco env update` the parameter, then update the resource (e.g. add `PasswordVersion: 2`).
 - `PasswordConfig` (instead of `PasswordParameterName`) reads the password from PCO Config. The value must
-  already exist there, because PCO Config only lets people create values; the provider never writes it:
+  already exist there, because PCO Config only lets people create values; the provider never writes it.
+  `RoleArn` is pco-config-service's `ExternalConfigMySQLProviderReadRoleArn` output, which can only read the
+  namespaces listed there, so add the app's namespace to that role first:
 
 ```yaml
     PasswordConfig:
-      RoleArn: arn:aws:iam::499739914416:role/pco-config-ExternalConfigReadOnlyRole-TKvv6aCLulFk
+      RoleArn: arn:aws:iam::499739914416:role/pco-config-ExternalConfigMySQLProviderReadRole-xxxx
       TableName: pco-config-ConfigGlobalTable-1K3VX7KANE0MF
       Namespace: screens
       Name: production/database/password
